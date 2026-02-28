@@ -2,92 +2,102 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import requests
+import time
 
 st.set_page_config(layout="wide")
 
-st.title("⚡ BTC Dashboard (Cloud Working Version)")
+st.title("⚡ BTC Futures Institutional Dashboard")
+
+BASE = "https://fapi.binance.com/fapi/v1"
 
 
-# -----------------
-# SAFE GET
-# -----------------
+def get_json(url):
 
-def safe_get(url):
-
-    try:
-        r = requests.get(url, timeout=10)
-        if r.status_code == 200:
-            return r.json()
-    except:
-        pass
-
-    return None
+    return requests.get(url).json()
 
 
-# -----------------
-# BTC PRICE
-# -----------------
+# -------------------------
+# OPEN INTEREST
+# -------------------------
 
-price = safe_get(
-"https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT"
-)
+oi = get_json(f"{BASE}/openInterest?symbol=BTCUSDT")
 
-btc_price = float(price["price"]) if price else 0
+open_interest = float(oi["openInterest"])
 
-st.metric("BTC Price", btc_price)
+st.metric("Open Interest", open_interest)
 
 
-# -----------------
-# TRADES
-# -----------------
+# -------------------------
+# FUNDING
+# -------------------------
 
-trades = safe_get(
-"https://api.binance.com/api/v3/trades?symbol=BTCUSDT&limit=100"
-)
+fund = get_json(f"{BASE}/fundingRate?symbol=BTCUSDT&limit=1")
 
-if trades:
+fund_rate = float(fund[0]["fundingRate"])
 
-    df = pd.DataFrame(trades)
-
-    df["price"] = df["price"].astype(float)
-    df["qty"] = df["qty"].astype(float)
-
-    whales = df[df.qty > 0.5]
-
-    st.subheader("🐋 Whale Trades")
-
-    st.dataframe(whales)
+st.metric("Funding Rate", fund_rate)
 
 
-# -----------------
-# DEPTH
-# -----------------
+# -------------------------
+# LIQUIDATIONS
+# -------------------------
 
-depth = safe_get(
-"https://api.binance.com/api/v3/depth?symbol=BTCUSDT&limit=20"
-)
+liq = get_json(f"{BASE}/allForceOrders?symbol=BTCUSDT&limit=50")
 
-if depth:
+liq_df = pd.DataFrame(liq)
 
-    bids = pd.DataFrame(depth["bids"], columns=["price","qty"]).astype(float)
+liq_df["price"] = liq_df["price"].astype(float)
 
-    asks = pd.DataFrame(depth["asks"], columns=["price","qty"]).astype(float)
+st.subheader("Liquidations")
 
-    st.subheader("📚 Liquidity")
-
-    fig = go.Figure()
-
-    fig.add_bar(x=bids.price, y=bids.qty, name="Bids")
-
-    fig.add_bar(x=asks.price, y=asks.qty, name="Asks")
-
-    st.plotly_chart(fig, use_container_width=True)
+st.dataframe(liq_df)
 
 
-# -----------------
-# REFRESH
-# -----------------
+# -------------------------
+# WHALES
+# -------------------------
 
-if st.button("Refresh"):
+trades = get_json(f"{BASE}/aggTrades?symbol=BTCUSDT&limit=200")
 
-    st.rerun()
+df = pd.DataFrame(trades)
+
+df["price"] = df["p"].astype(float)
+
+df["qty"] = df["q"].astype(float)
+
+whales = df[df.qty > 5]
+
+st.subheader("Whales")
+
+st.dataframe(whales)
+
+
+# -------------------------
+# LIQUIDITY
+# -------------------------
+
+depth = get_json(f"{BASE}/depth?symbol=BTCUSDT&limit=50")
+
+bids = pd.DataFrame(depth["bids"], columns=["price","qty"]).astype(float)
+
+asks = pd.DataFrame(depth["asks"], columns=["price","qty"]).astype(float)
+
+
+fig = go.Figure()
+
+fig.add_bar(x=bids.price, y=bids.qty, name="Bids")
+
+fig.add_bar(x=asks.price, y=asks.qty, name="Asks")
+
+st.subheader("Liquidity")
+
+st.plotly_chart(fig)
+
+
+# -------------------------
+# REFRESH LOOP
+# -------------------------
+
+time.sleep(3)
+
+st.rerun()
