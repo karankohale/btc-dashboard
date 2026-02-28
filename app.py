@@ -5,13 +5,13 @@ import plotly.graph_objects as go
 
 st.set_page_config(layout="wide")
 
-st.title("💰 Smart Money Tracker Dashboard")
+st.title("💰 Smart Money Tracker PRO")
 
 # -----------------------
-# SAFE FETCH FUNCTION
+# SAFE FETCH
 # -----------------------
 
-def safe_fetch(url):
+def fetch(url):
 
     try:
 
@@ -32,27 +32,26 @@ def safe_fetch(url):
 # PRICE
 # -----------------------
 
-price = 0
+price = None
 
-price_data = safe_fetch(
+binance = fetch(
 "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT"
 )
 
-if price_data and "price" in price_data:
+if binance and "price" in binance:
 
-    price = float(price_data["price"])
+    price = float(binance["price"])
 
 else:
 
-    # fallback CoinGecko
-
-    cg = safe_fetch(
+    cg = fetch(
 "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd"
 )
 
     if cg:
 
         price = cg["bitcoin"]["usd"]
+
 
 st.metric("BTC Price", price)
 
@@ -61,9 +60,12 @@ st.metric("BTC Price", price)
 # TRADES
 # -----------------------
 
-trade_data = safe_fetch(
+trade_data = fetch(
 "https://api.binance.com/api/v3/trades?symbol=BTCUSDT&limit=500"
 )
+
+support = None
+resistance = None
 
 if trade_data:
 
@@ -75,22 +77,22 @@ if trade_data:
 
     df["value"] = df["price"] * df["qty"]
 
-    whales = df[df["value"] > 50000]
+    whales = df[df.value > 50000]
 
-    st.subheader("🐋 Whale Trades")
+    st.subheader("🐋 Whale Activity")
 
     st.dataframe(whales)
 
 else:
 
-    st.warning("No trade data available")
+    st.warning("Trade data unavailable")
 
 
 # -----------------------
-# DEPTH
+# LIQUIDITY
 # -----------------------
 
-depth = safe_fetch(
+depth = fetch(
 "https://api.binance.com/api/v3/depth?symbol=BTCUSDT&limit=100"
 )
 
@@ -107,9 +109,9 @@ if depth:
 
     col1, col2 = st.columns(2)
 
-    col1.metric("Support Zone", support)
+    col1.metric("Support", support)
 
-    col2.metric("Resistance Zone", resistance)
+    col2.metric("Resistance", resistance)
 
 
     fig = go.Figure()
@@ -122,40 +124,44 @@ if depth:
 
     fig.add_vline(x=resistance)
 
-    st.subheader("📚 Liquidity Heatmap")
+    st.subheader("Liquidity Heatmap")
 
     st.plotly_chart(fig, use_container_width=True)
 
 else:
 
-    st.warning("No liquidity data available")
+    st.warning("Liquidity unavailable")
 
 
 # -----------------------
-# SIGNAL
+# SIGNAL ENGINE (PRO)
 # -----------------------
 
-if price:
+st.subheader("Smart Money Signal")
+
+if price and support and resistance:
 
     if price < support:
 
-        st.success("🟢 Smart Money BUY Zone")
+        st.success("🟢 STRONG BUY ZONE")
 
     elif price > resistance:
 
-        st.error("🔴 Smart Money SELL Zone")
+        st.error("🔴 STRONG SELL ZONE")
 
     else:
 
-        st.warning("⚠️ Neutral Zone")
+        st.info("⚪ ACCUMULATION ZONE")
+
+else:
+
+    st.warning("Signal unavailable")
 
 
 # -----------------------
-# EXPORT
+# REFRESH
 # -----------------------
 
-if trade_data:
+if st.button("Refresh"):
 
-    csv = df.to_csv(index=False).encode()
-
-    st.download_button("Download Whale Data", csv, "whales.csv")
+    st.rerun()
