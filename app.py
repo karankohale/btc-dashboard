@@ -2,39 +2,14 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import requests
-from datetime import datetime
-
-# -----------------------------
-# PAGE CONFIG
-# -----------------------------
 
 st.set_page_config(layout="wide")
 
-# -----------------------------
-# THEME
-# -----------------------------
+st.title("⚡ BTC PRO Dashboard (Cloud-Proof)")
 
-theme = st.sidebar.selectbox("Theme", ["Dark", "Light"])
-
-bg = "#0e1117" if theme == "Dark" else "white"
-text = "white" if theme == "Dark" else "black"
-
-st.markdown(f"""
-<style>
-.stApp {{
-background-color: {bg};
-color: {text};
-}}
-</style>
-""", unsafe_allow_html=True)
-
-st.title("⚡ PRO BTC Futures Dashboard (Cloud Version)")
-
-BASE = "https://fapi.binance.com/fapi/v1"
-
-# -----------------------------
-# SAFE API FUNCTION
-# -----------------------------
+# -----------------------
+# SAFE REQUEST
+# -----------------------
 
 def safe_get(url):
 
@@ -43,151 +18,96 @@ def safe_get(url):
         if r.status_code == 200:
             return r.json()
     except:
-        pass
+        return None
 
     return None
 
 
-# -----------------------------
-# OPEN INTEREST
-# -----------------------------
+# -----------------------
+# BTC PRICE (CoinGecko fallback)
+# -----------------------
 
-oi = safe_get(f"{BASE}/openInterest?symbol=BTCUSDT")
+price_data = safe_get(
+"https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd"
+)
 
-open_interest = float(oi["openInterest"]) if oi else 0
+price = price_data["bitcoin"]["usd"] if price_data else 0
 
-
-# -----------------------------
-# FUNDING RATE
-# -----------------------------
-
-fund = safe_get(f"{BASE}/fundingRate?symbol=BTCUSDT&limit=1")
-
-funding_rate = float(fund[0]["fundingRate"]) if fund else 0
+st.metric("BTC Price", price)
 
 
-# -----------------------------
-# LIQUIDATIONS HISTORY
-# -----------------------------
+# -----------------------
+# BINANCE DEPTH (fallback safe)
+# -----------------------
 
-liq = safe_get(f"{BASE}/allForceOrders?symbol=BTCUSDT&limit=100")
-
-if liq:
-
-    liq_df = pd.DataFrame(liq)
-
-    liq_df["price"] = liq_df["price"].astype(float)
-    liq_df["qty"] = liq_df["origQty"].astype(float)
-
-else:
-
-    liq_df = pd.DataFrame()
-
-
-# -----------------------------
-# WHALE TRADES
-# -----------------------------
-
-trades = safe_get(f"{BASE}/aggTrades?symbol=BTCUSDT&limit=200")
-
-if trades:
-
-    trade_df = pd.DataFrame(trades)
-
-    trade_df["price"] = trade_df["p"].astype(float)
-    trade_df["qty"] = trade_df["q"].astype(float)
-
-    whales = trade_df[trade_df.qty > 5]
-
-else:
-
-    trade_df = pd.DataFrame()
-    whales = pd.DataFrame()
-
-
-# -----------------------------
-# LIQUIDITY HEATMAP
-# -----------------------------
-
-depth = safe_get(f"{BASE}/depth?symbol=BTCUSDT&limit=50")
+depth = safe_get(
+"https://api.binance.com/api/v3/depth?symbol=BTCUSDT&limit=20"
+)
 
 if depth:
 
-    bids = pd.DataFrame(depth["bids"], columns=["price", "qty"]).astype(float)
+    bids = pd.DataFrame(depth["bids"], columns=["price","qty"]).astype(float)
+    asks = pd.DataFrame(depth["asks"], columns=["price","qty"]).astype(float)
 
-    asks = pd.DataFrame(depth["asks"], columns=["price", "qty"]).astype(float)
+    st.subheader("📚 Liquidity")
+
+    fig = go.Figure()
+
+    fig.add_bar(x=bids.price, y=bids.qty, name="Bids")
+    fig.add_bar(x=asks.price, y=asks.qty, name="Asks")
+
+    st.plotly_chart(fig, use_container_width=True)
 
 else:
 
-    bids = pd.DataFrame()
-    asks = pd.DataFrame()
+    st.warning("Liquidity data unavailable")
 
 
-# -----------------------------
-# METRICS DISPLAY
-# -----------------------------
+# -----------------------
+# RECENT TRADES (always works)
+# -----------------------
 
-c1, c2 = st.columns(2)
+trades = safe_get(
+"https://api.binance.com/api/v3/trades?symbol=BTCUSDT&limit=50"
+)
 
-c1.metric("Open Interest", round(open_interest, 2))
+if trades:
 
-c2.metric("Funding Rate", funding_rate)
+    df = pd.DataFrame(trades)
 
+    df["price"] = df["price"].astype(float)
+    df["qty"] = df["qty"].astype(float)
 
-# -----------------------------
-# LIQUIDATIONS
-# -----------------------------
+    st.subheader("🐋 Whale Trades")
 
-st.subheader("🔥 Liquidations")
+    whales = df[df.qty > 1]
 
-st.dataframe(liq_df)
+    st.dataframe(whales)
 
+else:
 
-# -----------------------------
-# WHALES
-# -----------------------------
-
-st.subheader("🐋 Whale Trades")
-
-st.dataframe(whales)
+    st.warning("Trade data unavailable")
 
 
-# -----------------------------
-# LIQUIDITY HEATMAP
-# -----------------------------
+# -----------------------
+# EXPORT
+# -----------------------
 
-st.subheader("📚 Liquidity Heatmap")
+if trades:
 
-fig = go.Figure()
-
-if not bids.empty:
-    fig.add_bar(x=bids.price, y=bids.qty, name="Bids")
-
-if not asks.empty:
-    fig.add_bar(x=asks.price, y=asks.qty, name="Asks")
-
-st.plotly_chart(fig, use_container_width=True)
-
-
-# -----------------------------
-# EXPORT CSV
-# -----------------------------
-
-if not liq_df.empty:
-
-    csv = liq_df.to_csv(index=False).encode()
+    csv = df.to_csv(index=False).encode()
 
     st.download_button(
-        "Download Liquidations CSV",
+        "Download CSV",
         csv,
-        "liquidations.csv"
+        "btc_trades.csv"
     )
 
 
-# -----------------------------
-# REFRESH BUTTON
-# -----------------------------
+# -----------------------
+# REFRESH
+# -----------------------
 
-if st.button("🔄 Refresh Data"):
+if st.button("Refresh"):
 
     st.rerun()
