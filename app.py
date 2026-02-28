@@ -8,130 +8,154 @@ st.set_page_config(layout="wide")
 st.title("💰 Smart Money Tracker Dashboard")
 
 # -----------------------
-# FUNCTION
+# SAFE FETCH FUNCTION
 # -----------------------
 
-def get_data(url):
+def safe_fetch(url):
 
     try:
+
         r = requests.get(url, timeout=10)
-        return r.json()
+
+        if r.status_code == 200:
+
+            return r.json()
+
     except:
+
         return None
+
+    return None
 
 
 # -----------------------
 # PRICE
 # -----------------------
 
-price_data = get_data(
+price = 0
+
+price_data = safe_fetch(
 "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT"
 )
 
-price = float(price_data["price"])
+if price_data and "price" in price_data:
+
+    price = float(price_data["price"])
+
+else:
+
+    # fallback CoinGecko
+
+    cg = safe_fetch(
+"https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd"
+)
+
+    if cg:
+
+        price = cg["bitcoin"]["usd"]
 
 st.metric("BTC Price", price)
 
 
 # -----------------------
-# RECENT TRADES
+# TRADES
 # -----------------------
 
-trades = get_data(
+trade_data = safe_fetch(
 "https://api.binance.com/api/v3/trades?symbol=BTCUSDT&limit=500"
 )
 
-df = pd.DataFrame(trades)
+if trade_data:
 
-df["price"] = df["price"].astype(float)
-df["qty"] = df["qty"].astype(float)
+    df = pd.DataFrame(trade_data)
 
-df["value"] = df["price"] * df["qty"]
+    df["price"] = df["price"].astype(float)
+
+    df["qty"] = df["qty"].astype(float)
+
+    df["value"] = df["price"] * df["qty"]
+
+    whales = df[df["value"] > 50000]
+
+    st.subheader("🐋 Whale Trades")
+
+    st.dataframe(whales)
+
+else:
+
+    st.warning("No trade data available")
 
 
 # -----------------------
-# WHALES
+# DEPTH
 # -----------------------
 
-whales = df[df["value"] > 50000]
-
-st.subheader("🐋 Whale Trades")
-
-st.dataframe(whales)
-
-
-# -----------------------
-# LIQUIDITY
-# -----------------------
-
-depth = get_data(
+depth = safe_fetch(
 "https://api.binance.com/api/v3/depth?symbol=BTCUSDT&limit=100"
 )
 
-bids = pd.DataFrame(depth["bids"], columns=["price","qty"]).astype(float)
+if depth:
 
-asks = pd.DataFrame(depth["asks"], columns=["price","qty"]).astype(float)
+    bids = pd.DataFrame(depth["bids"], columns=["price","qty"]).astype(float)
 
+    asks = pd.DataFrame(depth["asks"], columns=["price","qty"]).astype(float)
 
-# detect liquidity walls
+    support = bids.loc[bids.qty.idxmax()].price
 
-support = bids.loc[bids.qty.idxmax()].price
-
-resistance = asks.loc[asks.qty.idxmax()].price
-
-
-col1, col2 = st.columns(2)
-
-col1.metric("Support Zone", support)
-
-col2.metric("Resistance Zone", resistance)
+    resistance = asks.loc[asks.qty.idxmax()].price
 
 
-# -----------------------
-# HEATMAP
-# -----------------------
+    col1, col2 = st.columns(2)
 
-fig = go.Figure()
+    col1.metric("Support Zone", support)
 
-fig.add_bar(x=bids.price, y=bids.qty, name="Buy Liquidity")
+    col2.metric("Resistance Zone", resistance)
 
-fig.add_bar(x=asks.price, y=asks.qty, name="Sell Liquidity")
 
-fig.add_vline(x=support)
+    fig = go.Figure()
 
-fig.add_vline(x=resistance)
+    fig.add_bar(x=bids.price, y=bids.qty, name="Buy Liquidity")
 
-st.plotly_chart(fig, use_container_width=True)
+    fig.add_bar(x=asks.price, y=asks.qty, name="Sell Liquidity")
+
+    fig.add_vline(x=support)
+
+    fig.add_vline(x=resistance)
+
+    st.subheader("📚 Liquidity Heatmap")
+
+    st.plotly_chart(fig, use_container_width=True)
+
+else:
+
+    st.warning("No liquidity data available")
 
 
 # -----------------------
 # SIGNAL
 # -----------------------
 
-if price < support:
+if price:
 
-    st.success("🟢 Smart Money BUY Zone")
+    if price < support:
 
-elif price > resistance:
+        st.success("🟢 Smart Money BUY Zone")
 
-    st.error("🔴 Smart Money SELL Zone")
+    elif price > resistance:
 
-else:
+        st.error("🔴 Smart Money SELL Zone")
 
-    st.warning("⚠️ Neutral Zone")
+    else:
+
+        st.warning("⚠️ Neutral Zone")
 
 
 # -----------------------
 # EXPORT
 # -----------------------
 
-csv = whales.to_csv(index=False).encode()
+if trade_data:
 
-st.download_button(
+    csv = df.to_csv(index=False).encode()
 
-"Download Whale Data",
-
-csv,
-
-"whales.csv"
-)
+    st.download_button("Download Whale Data", csv, "whales.csv")
