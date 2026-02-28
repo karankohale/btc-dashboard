@@ -1,206 +1,111 @@
 import streamlit as st
-import websocket
-import json
-import threading
 import pandas as pd
 import plotly.graph_objects as go
-from datetime import datetime
+import requests
+import time
 
 st.set_page_config(layout="wide")
 
-st.title("⚡ Realtime BTC Liquidation Dashboard (FREE)")
+st.title("⚡ BTC Liquidation Dashboard (Cloud Compatible)")
 
-# -----------------------
-# SESSION STATE INIT
-# -----------------------
 
-if "liquidations" not in st.session_state:
-    st.session_state.liquidations = []
+# -------------------------
+# SAFE API CALL
+# -------------------------
 
-if "trades" not in st.session_state:
-    st.session_state.trades = []
+def safe_get(url):
 
-if "bids" not in st.session_state:
-    st.session_state.bids = []
+    try:
 
-if "asks" not in st.session_state:
-    st.session_state.asks = []
+        r = requests.get(url, timeout=10)
 
-if "oi" not in st.session_state:
-    st.session_state.oi = 0
+        if r.status_code == 200:
 
+            return r.json()
 
-# -----------------------
-# LIQUIDATION STREAM
-# -----------------------
+    except:
 
-def liquidation_ws():
+        return None
 
-    def on_message(ws, message):
 
-        data = json.loads(message)
+# -------------------------
+# LIQUIDATIONS
+# -------------------------
 
-        if "o" in data:
+liq_data = safe_get(
 
-            o = data["o"]
+"https://fapi.binance.com/fapi/v1/forceOrders?symbol=BTCUSDT&limit=50"
 
-            price = float(o["p"])
-            qty = float(o["q"])
-            side = o["S"]
+)
 
-            st.session_state.liquidations.append({
+if liq_data:
 
-                "time": datetime.now(),
-                "price": price,
-                "qty": qty,
-                "side": side
+    liq_df = pd.DataFrame(liq_data)
 
-            })
+    liq_df["price"] = liq_df["price"].astype(float)
 
-    ws = websocket.WebSocketApp(
+    liq_df["qty"] = liq_df["origQty"].astype(float)
 
-        "wss://fstream.binance.com/ws/!forceOrder@arr",
+else:
 
-        on_message=on_message
+    liq_df = pd.DataFrame()
 
-    )
-
-    ws.run_forever()
-
-
-# -----------------------
-# TRADE STREAM
-# -----------------------
-
-def trade_ws():
-
-    def on_message(ws, message):
-
-        data = json.loads(message)
-
-        price = float(data["p"])
-        qty = float(data["q"])
-
-        st.session_state.trades.append({
-
-            "time": datetime.now(),
-            "price": price,
-            "qty": qty
-
-        })
-
-    ws = websocket.WebSocketApp(
-
-        "wss://fstream.binance.com/ws/btcusdt@aggTrade",
-
-        on_message=on_message
-
-    )
-
-    ws.run_forever()
-
-
-# -----------------------
-# DEPTH STREAM
-# -----------------------
-
-def depth_ws():
-
-    def on_message(ws, message):
-
-        data = json.loads(message)
-
-        st.session_state.bids = data["b"]
-        st.session_state.asks = data["a"]
-
-    ws = websocket.WebSocketApp(
-
-        "wss://fstream.binance.com/ws/btcusdt@depth20@100ms",
-
-        on_message=on_message
-
-    )
-
-    ws.run_forever()
-
-
-# -----------------------
-# OPEN INTEREST STREAM
-# -----------------------
-
-def oi_ws():
-
-    def on_message(ws, message):
-
-        data = json.loads(message)
-
-        st.session_state.oi = float(data["o"])
-
-    ws = websocket.WebSocketApp(
-
-        "wss://fstream.binance.com/ws/btcusdt@openInterest",
-
-        on_message=on_message
-
-    )
-
-    ws.run_forever()
-
-
-# -----------------------
-# START THREADS
-# -----------------------
-
-threading.Thread(target=liquidation_ws, daemon=True).start()
-threading.Thread(target=trade_ws, daemon=True).start()
-threading.Thread(target=depth_ws, daemon=True).start()
-threading.Thread(target=oi_ws, daemon=True).start()
-
-
-# -----------------------
-# DISPLAY METRICS
-# -----------------------
-
-st.metric("Open Interest", st.session_state.oi)
-
-
-# -----------------------
-# LIQUIDATION HEATMAP
-# -----------------------
 
 st.subheader("🔥 Liquidations")
-
-liq_df = pd.DataFrame(st.session_state.liquidations[-100:])
 
 st.dataframe(liq_df)
 
 
-# -----------------------
-# WHALE DETECTION
-# -----------------------
+# -------------------------
+# TRADES
+# -------------------------
+
+trade_data = safe_get(
+
+"https://fapi.binance.com/fapi/v1/trades?symbol=BTCUSDT&limit=100"
+
+)
+
+if trade_data:
+
+    trade_df = pd.DataFrame(trade_data)
+
+    trade_df["price"] = trade_df["price"].astype(float)
+
+    trade_df["qty"] = trade_df["qty"].astype(float)
+
+else:
+
+    trade_df = pd.DataFrame()
+
 
 st.subheader("🐋 Whale Trades")
 
-trade_df = pd.DataFrame(st.session_state.trades[-200:])
-
 if not trade_df.empty:
 
-    whale_df = trade_df[trade_df.qty > 5]
+    whales = trade_df[trade_df.qty > 5]
 
-    st.dataframe(whale_df)
+    st.dataframe(whales)
 
 
-# -----------------------
-# LIQUIDITY HEATMAP
-# -----------------------
+# -------------------------
+# LIQUIDITY
+# -------------------------
 
-st.subheader("📚 Liquidity Heatmap")
+depth = safe_get(
 
-if st.session_state.bids:
+"https://fapi.binance.com/fapi/v1/depth?symbol=BTCUSDT&limit=20"
 
-    bids = pd.DataFrame(st.session_state.bids, columns=["price","qty"]).astype(float)
+)
 
-    asks = pd.DataFrame(st.session_state.asks, columns=["price","qty"]).astype(float)
+if depth:
+
+    bids = pd.DataFrame(depth["bids"], columns=["price","qty"]).astype(float)
+
+    asks = pd.DataFrame(depth["asks"], columns=["price","qty"]).astype(float)
+
+
+    st.subheader("📚 Liquidity Heatmap")
 
     fig = go.Figure()
 
@@ -211,9 +116,9 @@ if st.session_state.bids:
     st.plotly_chart(fig, use_container_width=True)
 
 
-# -----------------------
+# -------------------------
 # EXPORT
-# -----------------------
+# -------------------------
 
 if not liq_df.empty:
 
@@ -221,7 +126,7 @@ if not liq_df.empty:
 
     st.download_button(
 
-        "Download Liquidations CSV",
+        "Download Liquidation CSV",
 
         csv,
 
@@ -230,8 +135,14 @@ if not liq_df.empty:
     )
 
 
-# -----------------------
-# AUTO REFRESH
-# -----------------------
+# -------------------------
+# REFRESH BUTTON
+# -------------------------
 
-st.experimental_rerun()
+if st.button("Refresh Data"):
+
+    st.write("Refreshing...")
+
+    time.sleep(1)
+
+    st.rerun()
