@@ -2,8 +2,6 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import requests
-import time
-from datetime import datetime
 
 st.set_page_config(layout="wide")
 
@@ -23,159 +21,96 @@ color:{text};
 </style>
 """, unsafe_allow_html=True)
 
+st.title("BTC Institutional Dashboard")
 
-st.title("ULTIMATE Institutional BTC Dashboard")
+# ---------------- AUTO REFRESH ----------------
 
+st.autorefresh(interval=5000, key="refresh")
 
 # ---------------- SAFE REQUEST ----------------
 
 def safe_get(url):
-
     try:
-
-        r=requests.get(url, timeout=10)
-
-        if r.status_code==200:
-
+        r = requests.get(url, timeout=10)
+        if r.status_code == 200:
             return r.json()
-
-        else:
-
-            return None
-
     except:
+        pass
+    return None
 
-        return None
+# ✅ USE BINANCE US (NOT global)
 
+BASE = "https://api.binance.us/api/v3"
 
 # ---------------- PRICE ----------------
 
-@st.cache_data(ttl=2)
+price_data = safe_get(f"{BASE}/ticker/price?symbol=BTCUSDT")
 
-def get_price():
-
-    data=safe_get(
-
-    "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT"
-
-    )
-
-    if data and "price" in data:
-
-        return float(data["price"])
-
-    return 0
-
+price = float(price_data["price"]) if price_data else 0
 
 # ---------------- TRADES ----------------
 
-@st.cache_data(ttl=2)
+trades_data = safe_get(f"{BASE}/trades?symbol=BTCUSDT&limit=50")
 
-def get_trades():
+if trades_data:
 
-    data=safe_get(
+    trades = pd.DataFrame(trades_data)
 
-    "https://api.binance.com/api/v3/trades?symbol=BTCUSDT&limit=100"
-
+    trades["price"] = trades["price"].astype(float)
+    trades["qty"] = trades["qty"].astype(float)
+    trades["side"] = trades["isBuyerMaker"].apply(
+        lambda x: "SELL" if x else "BUY"
     )
 
-    if not data:
+else:
 
-        return pd.DataFrame()
-
-
-    df=pd.DataFrame(data)
-
-    df["price"]=df["price"].astype(float)
-
-    df["qty"]=df["qty"].astype(float)
-
-    df["time"]=pd.to_datetime(df["time"], unit="ms")
-
-    df["side"]=df["isBuyerMaker"].apply(
-
-        lambda x:"SELL" if x else "BUY"
-
-    )
-
-    return df
-
+    trades = pd.DataFrame()
 
 # ---------------- DEPTH ----------------
 
-@st.cache_data(ttl=2)
+depth = safe_get(f"{BASE}/depth?symbol=BTCUSDT&limit=10")
 
-def get_depth():
+if depth:
 
-    data=safe_get(
+    bids = pd.DataFrame(depth["bids"], columns=["price","qty"]).astype(float)
+    asks = pd.DataFrame(depth["asks"], columns=["price","qty"]).astype(float)
 
-    "https://api.binance.com/api/v3/depth?symbol=BTCUSDT&limit=10"
+else:
 
-    )
-
-    if not data:
-
-        return pd.DataFrame(), pd.DataFrame()
-
-
-    bids=pd.DataFrame(data["bids"], columns=["price","qty"]).astype(float)
-
-    asks=pd.DataFrame(data["asks"], columns=["price","qty"]).astype(float)
-
-    return bids, asks
-
-
-# ---------------- FETCH ----------------
-
-price=get_price()
-
-trades=get_trades()
-
-bids, asks=get_depth()
-
+    bids = pd.DataFrame()
+    asks = pd.DataFrame()
 
 # ---------------- CALC ----------------
 
-buy=trades[trades.side=="BUY"].qty.sum() if not trades.empty else 0
+buy = trades[trades.side=="BUY"].qty.sum() if not trades.empty else 0
+sell = trades[trades.side=="SELL"].qty.sum() if not trades.empty else 0
 
-sell=trades[trades.side=="SELL"].qty.sum() if not trades.empty else 0
-
-total=buy+sell
-
-buy_per=(buy/total*100) if total>0 else 0
-
-cvd=buy-sell
-
+total = buy + sell
+buy_per = (buy/total*100) if total>0 else 0
+cvd = buy - sell
 
 # ---------------- METRICS ----------------
 
-c1,c2,c3,c4=st.columns(4)
+c1,c2,c3,c4 = st.columns(4)
 
-c1.metric("Price", price)
-
+c1.metric("BTC Price", price)
 c2.metric("Buy %", round(buy_per,2))
-
 c3.metric("Sell %", round(100-buy_per,2))
-
 c4.metric("CVD", round(cvd,2))
-
 
 # ---------------- HEATMAP ----------------
 
-st.subheader("Liquidity Heatmap")
+st.subheader("Liquidity")
 
-fig=go.Figure()
+fig = go.Figure()
 
 if not bids.empty:
-
     fig.add_bar(x=bids.price, y=bids.qty, name="Bids")
 
 if not asks.empty:
-
     fig.add_bar(x=asks.price, y=asks.qty, name="Asks")
 
 st.plotly_chart(fig, use_container_width=True)
-
 
 # ---------------- TRADES ----------------
 
@@ -183,26 +118,8 @@ st.subheader("Trades")
 
 st.dataframe(trades)
 
-
 # ---------------- EXPORT ----------------
 
-csv=trades.to_csv(index=False).encode()
+csv = trades.to_csv(index=False).encode()
 
-st.download_button(
-
-"Export CSV",
-
-csv,
-
-"btc_trades.csv",
-
-"text/csv"
-
-)
-
-
-# ---------------- AUTO REFRESH ----------------
-
-time.sleep(3)
-
-st.rerun()
+st.download_button("Export CSV", csv, "btc.csv", "text/csv")
