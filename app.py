@@ -5,179 +5,323 @@ import threading
 import pandas as pd
 import plotly.graph_objects as go
 import time
+from datetime import datetime
+
+# --------------------
+# CONFIG
+# --------------------
 
 st.set_page_config(layout="wide")
 
-st.title("₿ Hedge Fund Order Flow Dashboard")
+# --------------------
+# THEME
+# --------------------
+
+theme = st.sidebar.selectbox("Theme", ["Dark","Light"])
+
+if theme=="Dark":
+
+    bg="#0e1117"
+    text="white"
+
+else:
+
+    bg="white"
+    text="black"
 
 
-# -------------------
-# STATE INIT
-# -------------------
-
-if "data" not in st.session_state:
-
-    st.session_state.data = {
-
-        "buy": 0.0,
-        "sell": 0.0,
-        "cvd": 0.0,
-        "price": 0.0,
-        "trades": [],
-        "whales": [],
-        "started": False
-
-    }
+st.markdown(f"""
+<style>
+.stApp {{
+background-color:{bg};
+color:{text};
+}}
+</style>
+""", unsafe_allow_html=True)
 
 
-# -------------------
-# BINANCE WS
-# -------------------
-
-def start_ws():
-
-    def binance():
-
-        def on_msg(ws, msg):
-
-            d = json.loads(msg)
-
-            price = float(d['p'])
-            qty = float(d['q'])
-
-            st.session_state.data["price"] = price
-
-            if d['m']:
-
-                st.session_state.data["sell"] += qty
-                st.session_state.data["cvd"] -= qty
-                side = "SELL"
-
-            else:
-
-                st.session_state.data["buy"] += qty
-                st.session_state.data["cvd"] += qty
-                side = "BUY"
-
-            trade = ["Binance", price, qty, side]
-
-            st.session_state.data["trades"].append(trade)
-
-            if qty > 1:
-
-                st.session_state.data["whales"].append(trade)
+st.title("ULTIMATE Institutional BTC Dashboard")
 
 
-        ws = websocket.WebSocketApp(
+# --------------------
+# STATE
+# --------------------
 
-            "wss://stream.binance.com:9443/ws/btcusdt@trade",
-            on_message=on_msg
+if "init" not in st.session_state:
 
-        )
+    st.session_state.init=True
 
-        ws.run_forever()
+    st.session_state.price=0
 
+    st.session_state.buy=0
+    st.session_state.sell=0
+    st.session_state.cvd=0
 
-    thread = threading.Thread(target=binance)
+    st.session_state.trades=[]
 
-    thread.daemon = True
+    st.session_state.bids=[]
+    st.session_state.asks=[]
 
-    thread.start()
+    st.session_state.whales=[]
 
-
-# start only once
-
-if not st.session_state.data["started"]:
-
-    start_ws()
-
-    st.session_state.data["started"] = True
+    st.session_state.orderblocks=[]
 
 
-# -------------------
+# --------------------
+# TRADE STREAM
+# --------------------
+
+def trades_ws():
+
+    def on_msg(ws,msg):
+
+        d=json.loads(msg)
+
+        price=float(d["p"])
+        qty=float(d["q"])
+
+        st.session_state.price=price
+
+        side="BUY"
+
+        if d["m"]:
+
+            st.session_state.sell+=qty
+            st.session_state.cvd-=qty
+
+            side="SELL"
+
+        else:
+
+            st.session_state.buy+=qty
+            st.session_state.cvd+=qty
+
+
+        trade=[
+
+        datetime.now(),
+
+        price,
+
+        qty,
+
+        side
+
+        ]
+
+        st.session_state.trades.append(trade)
+
+
+        if qty>1:
+
+            st.session_state.whales.append(trade)
+
+
+        if qty>0.8:
+
+            st.session_state.orderblocks.append(trade)
+
+
+    ws=websocket.WebSocketApp(
+
+    "wss://stream.binance.com:9443/ws/btcusdt@trade",
+
+    on_message=on_msg
+
+    )
+
+    ws.run_forever()
+
+
+
+# --------------------
+# ORDER BOOK STREAM
+# --------------------
+
+def depth_ws():
+
+    def on_msg(ws,msg):
+
+        d=json.loads(msg)
+
+        st.session_state.bids=d["b"]
+
+        st.session_state.asks=d["a"]
+
+
+    ws=websocket.WebSocketApp(
+
+    "wss://stream.binance.com:9443/ws/btcusdt@depth10@100ms",
+
+    on_message=on_msg
+
+    )
+
+    ws.run_forever()
+
+
+
+threading.Thread(target=trades_ws,daemon=True).start()
+
+threading.Thread(target=depth_ws,daemon=True).start()
+
+
+
+# --------------------
 # CALCULATIONS
-# -------------------
+# --------------------
 
-buy = st.session_state.data["buy"]
+total=st.session_state.buy+st.session_state.sell
 
-sell = st.session_state.data["sell"]
-
-total = buy + sell
-
-buy_per = (buy/total*100) if total > 0 else 0
+buy_per=(st.session_state.buy/total*100) if total>0 else 0
 
 
-# -------------------
+# --------------------
 # METRICS
-# -------------------
+# --------------------
 
-c1,c2,c3,c4 = st.columns(4)
+c1,c2,c3,c4=st.columns(4)
 
-c1.metric("BTC Price", st.session_state.data["price"])
+c1.metric("Price", st.session_state.price)
 
 c2.metric("Buy %", round(buy_per,2))
 
 c3.metric("Sell %", round(100-buy_per,2))
 
-c4.metric("CVD", round(st.session_state.data["cvd"],2))
+c4.metric("CVD", round(st.session_state.cvd,2))
 
 
-# -------------------
-# GAUGE
-# -------------------
+# --------------------
+# LIQUIDITY HEATMAP
+# --------------------
 
-fig = go.Figure(go.Indicator(
+st.subheader("Liquidity Heatmap")
 
-mode="gauge+number",
+bids=pd.DataFrame(
 
-value=buy_per,
+st.session_state.bids,
 
-title={'text': "Buy Pressure"},
+columns=["Price","Volume"]
 
-gauge={'axis': {'range': [0,100]}}
+)
+
+asks=pd.DataFrame(
+
+st.session_state.asks,
+
+columns=["Price","Volume"]
+
+)
+
+bids["Price"]=bids["Price"].astype(float)
+
+bids["Volume"]=bids["Volume"].astype(float)
+
+asks["Price"]=asks["Price"].astype(float)
+
+asks["Volume"]=asks["Volume"].astype(float)
+
+
+fig=go.Figure()
+
+fig.add_trace(go.Bar(
+
+x=bids["Price"],
+
+y=bids["Volume"],
+
+name="Bids"
 
 ))
 
-st.plotly_chart(fig, use_container_width=True)
+fig.add_trace(go.Bar(
+
+x=asks["Price"],
+
+y=asks["Volume"],
+
+name="Asks"
+
+))
+
+st.plotly_chart(fig,use_container_width=True)
 
 
-# -------------------
+# --------------------
+# ORDER BLOCKS
+# --------------------
+
+st.subheader("Order Blocks")
+
+st.dataframe(
+
+pd.DataFrame(
+
+st.session_state.orderblocks,
+
+columns=["Time","Price","Qty","Side"]
+
+)
+
+)
+
+
+# --------------------
+# WHALES
+# --------------------
+
+st.subheader("Whales")
+
+st.dataframe(
+
+pd.DataFrame(
+
+st.session_state.whales,
+
+columns=["Time","Price","Qty","Side"]
+
+)
+
+)
+
+
+# --------------------
 # TRADES
-# -------------------
+# --------------------
 
-st.subheader("Trade Tape")
+st.subheader("Trades")
 
-df = pd.DataFrame(
+df=pd.DataFrame(
 
-st.session_state.data["trades"][-50:],
+st.session_state.trades,
 
-columns=["Exchange","Price","Qty","Side"]
+columns=["Time","Price","Qty","Side"]
 
 )
 
 st.dataframe(df)
 
 
-# -------------------
-# WHALES
-# -------------------
+# --------------------
+# EXPORT
+# --------------------
 
-st.subheader("Whale Alerts")
+csv=df.to_csv(index=False).encode()
 
-wf = pd.DataFrame(
+st.download_button(
 
-st.session_state.data["whales"][-20:],
+"Export CSV",
 
-columns=["Exchange","Price","Qty","Side"]
+csv,
+
+"btc_trades.csv",
+
+"text/csv"
 
 )
 
-st.dataframe(wf)
 
-
-# -------------------
-# AUTO REFRESH
-# -------------------
+# --------------------
 
 time.sleep(2)
 
