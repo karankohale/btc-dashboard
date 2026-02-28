@@ -1,34 +1,20 @@
 import streamlit as st
-import websocket
-import json
-import threading
 import pandas as pd
 import plotly.graph_objects as go
+import requests
 import time
 from datetime import datetime
 
-# --------------------
-# CONFIG
-# --------------------
-
 st.set_page_config(layout="wide")
 
-# --------------------
+# ----------------
 # THEME
-# --------------------
+# ----------------
 
 theme = st.sidebar.selectbox("Theme", ["Dark","Light"])
 
-if theme=="Dark":
-
-    bg="#0e1117"
-    text="white"
-
-else:
-
-    bg="white"
-    text="black"
-
+bg = "#0e1117" if theme=="Dark" else "white"
+text = "white" if theme=="Dark" else "black"
 
 st.markdown(f"""
 <style>
@@ -43,270 +29,151 @@ color:{text};
 st.title("ULTIMATE Institutional BTC Dashboard")
 
 
-# --------------------
-# STATE
-# --------------------
+# ----------------
+# FETCH DATA
+# ----------------
 
-if "init" not in st.session_state:
+@st.cache_data(ttl=2)
 
-    st.session_state.init=True
+def get_price():
 
-    st.session_state.price=0
+    url="https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT"
 
-    st.session_state.buy=0
-    st.session_state.sell=0
-    st.session_state.cvd=0
-
-    st.session_state.trades=[]
-
-    st.session_state.bids=[]
-    st.session_state.asks=[]
-
-    st.session_state.whales=[]
-
-    st.session_state.orderblocks=[]
+    return float(requests.get(url).json()["price"])
 
 
-# --------------------
-# TRADE STREAM
-# --------------------
+@st.cache_data(ttl=2)
 
-def trades_ws():
+def get_trades():
 
-    def on_msg(ws,msg):
+    url="https://api.binance.com/api/v3/trades?symbol=BTCUSDT&limit=100"
 
-        d=json.loads(msg)
+    data=requests.get(url).json()
 
-        price=float(d["p"])
-        qty=float(d["q"])
+    df=pd.DataFrame(data)
 
-        st.session_state.price=price
+    df["price"]=df["price"].astype(float)
 
-        side="BUY"
+    df["qty"]=df["qty"].astype(float)
 
-        if d["m"]:
+    df["time"]=pd.to_datetime(df["time"], unit="ms")
 
-            st.session_state.sell+=qty
-            st.session_state.cvd-=qty
+    df["side"]=df["isBuyerMaker"].apply(
 
-            side="SELL"
-
-        else:
-
-            st.session_state.buy+=qty
-            st.session_state.cvd+=qty
-
-
-        trade=[
-
-        datetime.now(),
-
-        price,
-
-        qty,
-
-        side
-
-        ]
-
-        st.session_state.trades.append(trade)
-
-
-        if qty>1:
-
-            st.session_state.whales.append(trade)
-
-
-        if qty>0.8:
-
-            st.session_state.orderblocks.append(trade)
-
-
-    ws=websocket.WebSocketApp(
-
-    "wss://stream.binance.com:9443/ws/btcusdt@trade",
-
-    on_message=on_msg
+        lambda x:"SELL" if x else "BUY"
 
     )
 
-    ws.run_forever()
+    return df
 
 
+@st.cache_data(ttl=2)
 
-# --------------------
-# ORDER BOOK STREAM
-# --------------------
+def get_depth():
 
-def depth_ws():
+    url="https://api.binance.com/api/v3/depth?symbol=BTCUSDT&limit=10"
 
-    def on_msg(ws,msg):
+    data=requests.get(url).json()
 
-        d=json.loads(msg)
+    bids=pd.DataFrame(data["bids"], columns=["price","qty"])
 
-        st.session_state.bids=d["b"]
+    asks=pd.DataFrame(data["asks"], columns=["price","qty"])
 
-        st.session_state.asks=d["a"]
+    bids=bids.astype(float)
 
+    asks=asks.astype(float)
 
-    ws=websocket.WebSocketApp(
-
-    "wss://stream.binance.com:9443/ws/btcusdt@depth10@100ms",
-
-    on_message=on_msg
-
-    )
-
-    ws.run_forever()
+    return bids, asks
 
 
+price=get_price()
 
-threading.Thread(target=trades_ws,daemon=True).start()
+trades=get_trades()
 
-threading.Thread(target=depth_ws,daemon=True).start()
+bids, asks=get_depth()
 
 
-
-# --------------------
+# ----------------
 # CALCULATIONS
-# --------------------
+# ----------------
 
-total=st.session_state.buy+st.session_state.sell
+buy=trades[trades.side=="BUY"].qty.sum()
 
-buy_per=(st.session_state.buy/total*100) if total>0 else 0
+sell=trades[trades.side=="SELL"].qty.sum()
+
+total=buy+sell
+
+buy_per=(buy/total*100) if total>0 else 0
+
+cvd=buy-sell
 
 
-# --------------------
+# ----------------
 # METRICS
-# --------------------
+# ----------------
 
 c1,c2,c3,c4=st.columns(4)
 
-c1.metric("Price", st.session_state.price)
+c1.metric("Price", price)
 
 c2.metric("Buy %", round(buy_per,2))
 
 c3.metric("Sell %", round(100-buy_per,2))
 
-c4.metric("CVD", round(st.session_state.cvd,2))
+c4.metric("CVD", round(cvd,2))
 
 
-# --------------------
-# LIQUIDITY HEATMAP
-# --------------------
+# ----------------
+# HEATMAP
+# ----------------
 
 st.subheader("Liquidity Heatmap")
 
-bids=pd.DataFrame(
-
-st.session_state.bids,
-
-columns=["Price","Volume"]
-
-)
-
-asks=pd.DataFrame(
-
-st.session_state.asks,
-
-columns=["Price","Volume"]
-
-)
-
-bids["Price"]=bids["Price"].astype(float)
-
-bids["Volume"]=bids["Volume"].astype(float)
-
-asks["Price"]=asks["Price"].astype(float)
-
-asks["Volume"]=asks["Volume"].astype(float)
-
-
 fig=go.Figure()
 
-fig.add_trace(go.Bar(
+fig.add_bar(x=bids.price, y=bids.qty, name="Bids")
 
-x=bids["Price"],
+fig.add_bar(x=asks.price, y=asks.qty, name="Asks")
 
-y=bids["Volume"],
-
-name="Bids"
-
-))
-
-fig.add_trace(go.Bar(
-
-x=asks["Price"],
-
-y=asks["Volume"],
-
-name="Asks"
-
-))
-
-st.plotly_chart(fig,use_container_width=True)
+st.plotly_chart(fig, use_container_width=True)
 
 
-# --------------------
-# ORDER BLOCKS
-# --------------------
+# ----------------
+# ORDERBLOCK
+# ----------------
 
 st.subheader("Order Blocks")
 
-st.dataframe(
+orderblocks=trades[trades.qty>0.5]
 
-pd.DataFrame(
-
-st.session_state.orderblocks,
-
-columns=["Time","Price","Qty","Side"]
-
-)
-
-)
+st.dataframe(orderblocks)
 
 
-# --------------------
+# ----------------
 # WHALES
-# --------------------
+# ----------------
 
 st.subheader("Whales")
 
-st.dataframe(
+whales=trades[trades.qty>1]
 
-pd.DataFrame(
-
-st.session_state.whales,
-
-columns=["Time","Price","Qty","Side"]
-
-)
-
-)
+st.dataframe(whales)
 
 
-# --------------------
+# ----------------
 # TRADES
-# --------------------
+# ----------------
 
 st.subheader("Trades")
 
-df=pd.DataFrame(
-
-st.session_state.trades,
-
-columns=["Time","Price","Qty","Side"]
-
-)
-
-st.dataframe(df)
+st.dataframe(trades)
 
 
-# --------------------
+# ----------------
 # EXPORT
-# --------------------
+# ----------------
 
-csv=df.to_csv(index=False).encode()
+csv=trades.to_csv(index=False).encode()
 
 st.download_button(
 
@@ -320,8 +187,6 @@ csv,
 
 )
 
-
-# --------------------
 
 time.sleep(2)
 
